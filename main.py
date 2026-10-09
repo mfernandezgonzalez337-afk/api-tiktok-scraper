@@ -50,16 +50,17 @@ def obtener_datos_tiktok(url: str):
     )
     html = respuesta.text
 
-    if "captcha" in html.lower() or "verify to continue" in html.lower():
+    # Captcha REAL solo si la página es reducida (< 20KB) y pide verificación explícita
+    if len(html) < 20000 and "verify to continue" in html.lower():
       return {
           "url": url,
-          "error": "TikTok solicitó verificación Captcha",
+          "error": "TikTok solicitó verificación Captcha real",
           "status": "error",
       }
 
     views, followers = None, None
 
-    # Búsqueda en bloques JSON embebidos
+    # 1. Búsqueda en bloques JSON embebidos
     m_json = re.search(
         r'<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
         html,
@@ -74,10 +75,10 @@ def obtener_datos_tiktok(url: str):
       try:
         datos_json = json.loads(m_json.group(1))
         views, followers = extraer_de_json(datos_json)
-      except:
+      except Exception:
         pass
 
-    # Búsqueda secundaria por Regex alternativos
+    # 2. Búsqueda secundaria por Regex alternativos
     if views is None:
       m_views = re.search(
           r'"(?:playCount|play_count|views)"\s*:\s*"?(\d+)"?', html
@@ -130,8 +131,8 @@ def diagnostico(url: str):
         "has_follower_count": (
             "followerCount" in html or "follower_count" in html
         ),
-        "is_captcha": "captcha" in html.lower()
-        or "verify to continue" in html.lower(),
+        "is_captcha": "verify to continue" in html.lower()
+        and len(html) < 20000,
         "snippet": html[:250].replace("\n", " "),
     }
   except Exception as e:
