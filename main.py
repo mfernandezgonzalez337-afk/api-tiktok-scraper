@@ -137,3 +137,69 @@ def diagnostico(url: str):
     }
   except Exception as e:
     return {"error": str(e)}
+
+
+# ---------------------------------------------------------------
+# NEW (additive): /api/status -> OK / TAKEN_DOWN / UNKNOWN
+# Does not touch /api/tiktok or /api/diag.
+# ---------------------------------------------------------------
+def _scope_video_detail(html):
+  m = re.search(
+      r'<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+      html,
+      re.DOTALL,
+  )
+  if not m:
+    return None, None
+  try:
+    data = json.loads(m.group(1))
+  except Exception:
+    return None, None
+  scope = data.get("__DEFAULT_SCOPE__", {}) or {}
+  return scope.get("webapp.video-detail"), list(scope.keys())
+
+
+@app.get("/api/status")
+def estado(url: str):
+  if not url:
+    raise HTTPException(status_code=400, detail="Se requiere una URL")
+  try:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            " (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    r = requests.get(url, impersonate="chrome110", headers=headers, timeout=12)
+    html = r.text
+
+    # Infra / anti-bot problems are NEVER treated as "taken down"
+    if r.status_code in (403, 429) or r.status_code >= 500:
+      return {"estado": "UNKNOWN", "motivo": f"http_{r.status_code}"}
+    if len(html) < 20000 and "verify to continue" in html.lower():
+      return {"estado": "UNKNOWN", "motivo": "captcha"}
+
+    detail, scope_keys = _scope_video_detail(html)
+    if detail is None:
+      return {
+          "estado": "UNKNOWN",
+          "motivo": "sin_video_detail",
+          "scope": scope_keys,
+      }
+
+    code = detail.get("statusCode")
+    item = (detail.get("itemInfo") or {}).get("itemStruct")
+
+    if item:
+      return {"estado": "OK", "statusCode": code}
+    # Taken down only if TikTok explicitly says so (non-zero code, no item)
+    if code not in (None, 0):
+      return {
+          "estado": "TAKEN_DOWN",
+          "statusCode": code,
+          "statusMsg": detail.get("statusMsg"),
+      }
+    return {"estado": "UNKNOWN", "motivo": "sin_item_ni_codigo", "statusCode": code}
+  except Exception as e:
+    return {"estado": "UNKNOWN", "motivo": f"exc_{type(e).__name__}"}
